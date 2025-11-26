@@ -1,0 +1,26 @@
+{
+    "configurations": [
+        {
+            "name": "config1",
+            "compilerPath": "${default}",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/Drivers/CMSIS/Include",
+                "${workspaceFolder}/Drivers/CMSIS/Device/ST/STM32G0xx/Include",
+                "${workspaceFolder}/Drivers/STM32G0xx_HAL_Driver/Inc",
+                "${workspaceFolder}/../FreeRTOS/Source/include",
+                "${workspaceFolder}/../FreeRTOS/Source/portable/GCC/ARM_CM0"
+            ],
+            "defines": [
+                "STM32G071xx",
+                "USE_FULL_LL_DRIVER"
+            ],
+            "cStandard": "gnu11",
+            "cppStandard": "gnu++17",
+            "compileCommands": [
+                "build/compile_commands.json"
+            ]
+        }
+    ],
+    "version": 4
+}
