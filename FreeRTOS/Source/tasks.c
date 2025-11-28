@@ -259,8 +259,9 @@ typedef struct tskTaskControlBlock 			/* The old naming convention is used to pr
 
 	ListItem_t			xStateListItem;	/*< The list that the state list item of a task is reference from denotes the state of that task (Ready, Blocked, Suspended ). */
 	ListItem_t			xEventListItem;		/*< Used to reference a task from an event list. */
+	ListItem_t			xTaskListItem;		/*< Used to reference a task from the task list. */
 	UBaseType_t			uxPriority;			/*< The priority of the task.  0 is the lowest priority. */
-	StackType_t			*pxStack;			/*< Points to the start of the stack. */
+	StackType_t			*pxStack;			/*< Points to the bottom of the stack. */
 	char				pcTaskName[ configMAX_TASK_NAME_LEN ];/*< Descriptive name given to the task when created.  Facilitates debugging only. */ /*lint !e971 Unqualified char types are allowed for strings and single characters only. */
 
 	#if ( ( portSTACK_GROWTH > 0 ) || ( configRECORD_STACK_HIGH_ADDRESS == 1 ) )
@@ -347,6 +348,11 @@ PRIVILEGED_DATA static List_t * volatile pxDelayedTaskList;				/*< Points to the
 PRIVILEGED_DATA static List_t * volatile pxOverflowDelayedTaskList;		/*< Points to the delayed task list currently being used to hold tasks that have overflowed the current tick count. */
 PRIVILEGED_DATA static List_t xPendingReadyList;						/*< Tasks that have been readied while the scheduler was suspended.  They will be moved to the ready list when the scheduler is resumed. */
 
+PRIVILEGED_DATA static List_t xTaskList; /* All tasks */
+
+#define prvAddToTaskList( pxTCB )		\
+	vListInsertEnd( &xTaskList, &( ( pxTCB )->xTaskListItem ) )
+
 #if( INCLUDE_vTaskDelete == 1 )
 
 	PRIVILEGED_DATA static List_t xTasksWaitingTermination;				/*< Tasks that have been deleted - but their memory not yet freed. */
@@ -416,7 +422,8 @@ PRIVILEGED_DATA static volatile UBaseType_t uxSchedulerSuspended	= ( UBaseType_t
 
 #if( configSUPPORT_STATIC_ALLOCATION == 1 )
 
-	extern void vApplicationGetIdleTaskMemory( StaticTask_t **ppxIdleTaskTCBBuffer, StackType_t **ppxIdleTaskStackBuffer, uint32_t *pulIdleTaskStackSize ); /*lint !e526 Symbol not defined as it is an application callback. */
+	extern void vApplicationGetIdleTaskMemory( StaticTask_t **ppxIdleTaskTCBBuffer ); /*lint !e526 Symbol not defined as it is an application callback. */
+	extern void vApplicationGetTaskMemory( StackType_t **ppxTaskStackBuffer, uint32_t *pulTaskStackSize );
 
 #endif
 
@@ -574,22 +581,214 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 
 #endif
 
+/* Stack pool ----------------------------------------------*/
+
+#define prvGetTaskStackSize(pxTCB) (((pxTCB)->pxStack) - ((pxTCB)->pxTopOfStack))
+
+	static struct
+	{
+		StackType_t *pxStackPool;
+		uint32_t ulStackPoolSize; /* In words, not bytes */
+		TCB_t *pxCurrentTCB;
+	} xStackPoolState = {0};
+
+	static TCB_t *prvGetPreviousTask(TCB_t *pxTCB)
+	{
+		ListItem_t *pxItem = pxTCB->xTaskListItem.pxPrevious;
+		if (((ListItem_t *)&(pxItem->pxContainer->xListEnd)) == pxItem)
+		{
+			return NULL;
+		}
+		return (TCB_t *)pxItem->pvOwner;
+	}
+
+	static TCB_t *prvGetNextTask(TCB_t *pxTCB)
+	{
+		ListItem_t *pxItem = pxTCB->xTaskListItem.pxNext;
+		if (((ListItem_t *)&(pxItem->pxContainer->xListEnd)) == pxItem)
+		{
+			return NULL;
+		}
+		return (TCB_t *)pxItem->pvOwner;
+	}
+
+	static int32_t prvCompareTask(TCB_t *pxTCB1, TCB_t *pxTCB2)
+	{
+		if (pxTCB1 == pxTCB2)
+		{
+			return 0;
+		}
+
+		for (TCB_t *pxIteratorTCB = prvGetNextTask(pxTCB1);;)
+		{
+			if (NULL == pxIteratorTCB)
+			{
+				/* Reach end */
+				return 1;
+			}
+			if (pxIteratorTCB == pxTCB2)
+			{
+				/* Reach task 2 */
+				return -1;
+			}
+			pxIteratorTCB = prvGetNextTask(pxIteratorTCB);
+		}
+
+		/* Wont reach here */
+		return 0;
+	}
+
+	static void prvStackMoveUp(TCB_t *pxTCB, uint32_t ulDistance)
+	{
+		for (StackType_t *pxIterator = pxTCB->pxStack - 1; pxIterator >= pxTCB->pxTopOfStack; pxIterator--)
+		{
+			*(pxIterator + ulDistance) = *pxIterator;
+		}
+		pxTCB->pxStack += ulDistance;
+		pxTCB->pxTopOfStack += ulDistance;
+	}
+
+	static void prvStackMoveDown(TCB_t *pxTCB, uint32_t ulDistance)
+	{
+		memcpy((void *)(pxTCB->pxTopOfStack - ulDistance),		//
+			   (void *)pxTCB->pxTopOfStack,						//
+			   sizeof(StackType_t) * prvGetTaskStackSize(pxTCB) //
+		);
+		pxTCB->pxStack -= ulDistance;
+		pxTCB->pxTopOfStack -= ulDistance;
+	}
+
+	static StackType_t *prvStackPoolAllocate(TCB_t * pxTCB, uint32_t ulStackDepth)
+	{
+		/* Initialize stack pool */
+		if (NULL == xStackPoolState.pxStackPool)
+		{
+			StackType_t *pxStack = NULL;
+			uint32_t ulStackSize = 0;
+			vApplicationGetTaskMemory(&pxStack, &ulStackSize);
+			if (NULL == pxStack || ulStackSize < configMINIMAL_STACK_SIZE)
+			{
+				return NULL;
+			}
+
+			StackType_t *pxStackEnd = pxStack + ulStackSize;
+			pxStack = (StackType_t *)((((uint32_t)pxStack) + portBYTE_ALIGNMENT_MASK) & ~((uint32_t)portBYTE_ALIGNMENT_MASK));
+			pxStackEnd = (StackType_t *)(((uint32_t)pxStackEnd) & ~((uint32_t)portBYTE_ALIGNMENT_MASK));
+
+			xStackPoolState.pxStackPool = pxStack;
+			xStackPoolState.ulStackPoolSize = pxStackEnd - pxStack;
+		}
+
+		if (NULL == xStackPoolState.pxCurrentTCB)
+		{
+			/* This is the first TCB */
+
+			if (xStackPoolState.ulStackPoolSize < ulStackDepth)
+			{
+				return NULL;
+			}
+
+			/* */
+			xStackPoolState.pxCurrentTCB = pxTCB;
+			return xStackPoolState.pxStackPool + xStackPoolState.ulStackPoolSize - ulStackDepth;
+		}
+		else
+		{
+			TCB_t *pxIteratorTCB = xStackPoolState.pxCurrentTCB;
+			TCB_t *pxPreviousTCB = prvGetPreviousTask(pxIteratorTCB);
+
+			uint32_t ulAvailableSize;
+			if (NULL == pxPreviousTCB)
+			{
+				ulAvailableSize = pxIteratorTCB->pxTopOfStack - xStackPoolState.pxStackPool;
+			}
+			else
+			{
+				ulAvailableSize = pxIteratorTCB->pxTopOfStack - pxPreviousTCB->pxStack;
+			}
+
+			if (ulAvailableSize < ulStackDepth)
+			{
+				return NULL;
+			}
+
+			while (NULL != pxIteratorTCB)
+			{
+				prvStackMoveDown(pxIteratorTCB, ulStackDepth);
+				pxIteratorTCB = prvGetNextTask(pxIteratorTCB);
+			}
+
+			return xStackPoolState.pxStackPool + xStackPoolState.ulStackPoolSize - ulStackDepth;
+		}
+	}
+
+	static void prvStackPoolMakeCurrent(TCB_t *pxTCB)
+	{
+		const int32_t lDiff = prvCompareTask( pxTCB , xStackPoolState. pxCurrentTCB);
+
+		if (0 == lDiff)
+		{
+			return;
+		}
+
+		if (lDiff < 0)
+		{
+			/* The task is lower than the current one */
+
+			TCB_t *pxIteratorTCB = prvGetPreviousTask(xStackPoolState.pxCurrentTCB);
+			const uint32_t ulDistance = xStackPoolState.pxCurrentTCB->pxTopOfStack - pxIteratorTCB->pxStack;
+
+			for (;;)
+			{
+				prvStackMoveUp(pxIteratorTCB, ulDistance);
+				if (pxTCB == pxIteratorTCB)
+				{
+					break;
+				}
+				pxIteratorTCB = prvGetPreviousTask(pxIteratorTCB);
+			}
+		}
+		else
+		{
+			/* The task is higher than the current one */
+
+			uint32_t ulDistance;
+			do
+			{
+				TCB_t *pxPreviousTCB = prvGetPreviousTask(xStackPoolState.pxCurrentTCB);
+				if (NULL == pxPreviousTCB)
+				{
+					ulDistance = xStackPoolState.pxCurrentTCB->pxTopOfStack - xStackPoolState.pxStackPool;
+				}
+				else
+				{
+					ulDistance = xStackPoolState.pxCurrentTCB->pxTopOfStack - pxPreviousTCB->pxStack;
+				}
+			} while (0);
+
+			for (TCB_t *pxIterator = xStackPoolState.pxCurrentTCB; pxIterator != pxTCB; pxIterator = prvGetNextTask(pxIterator))
+			{
+				prvStackMoveDown(pxIterator, ulDistance);
+			}
+		}
+
+		xStackPoolState.pxCurrentTCB = pxTCB ;
+	}
+
 /*-----------------------------------------------------------*/
 
-#if( configSUPPORT_STATIC_ALLOCATION == 1 )
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
 
 	TaskHandle_t xTaskCreateStatic(	TaskFunction_t pxTaskCode,
 									const char * const pcName,		/*lint !e971 Unqualified char types are allowed for strings and single characters only. */
-									const uint32_t ulStackDepth,
 									void * const pvParameters,
 									UBaseType_t uxPriority,
-									StackType_t * const puxStackBuffer,
 									StaticTask_t * const pxTaskBuffer )
 	{
 	TCB_t *pxNewTCB;
 	TaskHandle_t xReturn;
+    StackType_t *puxStackBuffer;
 
-		configASSERT( puxStackBuffer != NULL );
 		configASSERT( pxTaskBuffer != NULL );
 
 		#if( configASSERT_DEFINED == 1 )
@@ -603,13 +802,21 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 		}
 		#endif /* configASSERT_DEFINED */
 
-
-		if( ( pxTaskBuffer != NULL ) && ( puxStackBuffer != NULL ) )
+		if( ( pxTaskBuffer != NULL ) )
 		{
 			/* The memory used for the task's TCB and stack are passed into this
 			function - use them. */
 			pxNewTCB = ( TCB_t * ) pxTaskBuffer; /*lint !e740 !e9087 Unusual cast is ok as the structures are designed to have the same alignment, and the size is checked by an assert. */
-			pxNewTCB->pxStack = ( StackType_t * ) puxStackBuffer;
+
+			puxStackBuffer = prvStackPoolAllocate( pxNewTCB, configMINIMAL_STACK_SIZE );
+
+			if( NULL == puxStackBuffer )
+			{
+				return NULL;
+			}
+
+			/* pxStack points to the BOTTOM of the stack */
+			pxNewTCB->pxStack = puxStackBuffer - configMINIMAL_STACK_SIZE;
 
 			#if( tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE != 0 ) /*lint !e731 !e9029 Macro has been consolidated for readability reasons. */
 			{
@@ -619,7 +826,7 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 			}
 			#endif /* tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE */
 
-			prvInitialiseNewTask( pxTaskCode, pcName, ulStackDepth, pvParameters, uxPriority, &xReturn, pxNewTCB, NULL );
+			prvInitialiseNewTask( pxTaskCode, pcName, configMINIMAL_STACK_SIZE, pvParameters, uxPriority, &xReturn, pxNewTCB, NULL );
 			prvAddNewTaskToReadyList( pxNewTCB );
 		}
 		else
@@ -851,7 +1058,7 @@ UBaseType_t x;
 	#if( tskSET_NEW_STACKS_TO_KNOWN_VALUE == 1 )
 	{
 		/* Fill the stack with a known value to assist debugging. */
-		( void ) memset( pxNewTCB->pxStack, ( int ) tskSTACK_FILL_BYTE, ( size_t ) ulStackDepth * sizeof( StackType_t ) );
+		( void ) memset( pxNewTCB->pxStack - ulStackDepth, ( int ) tskSTACK_FILL_BYTE, ( size_t ) ulStackDepth * sizeof( StackType_t ) );
 	}
 	#endif /* tskSET_NEW_STACKS_TO_KNOWN_VALUE */
 
@@ -861,7 +1068,7 @@ UBaseType_t x;
 	by the port. */
 	#if( portSTACK_GROWTH < 0 )
 	{
-		pxTopOfStack = &( pxNewTCB->pxStack[ ulStackDepth - ( uint32_t ) 1 ] );
+		pxTopOfStack = pxNewTCB->pxStack - ( uint32_t ) 1;
 		pxTopOfStack = ( StackType_t * ) ( ( ( portPOINTER_SIZE_TYPE ) pxTopOfStack ) & ( ~( ( portPOINTER_SIZE_TYPE ) portBYTE_ALIGNMENT_MASK ) ) ); /*lint !e923 !e9033 !e9078 MISRA exception.  Avoiding casts between pointers and integers is not practical.  Size differences accounted for using portPOINTER_SIZE_TYPE type.  Checked by assert(). */
 
 		/* Check the alignment of the calculated top of stack is correct. */
@@ -948,6 +1155,9 @@ UBaseType_t x;
 	/* Event lists are always in priority order. */
 	listSET_LIST_ITEM_VALUE( &( pxNewTCB->xEventListItem ), ( TickType_t ) configMAX_PRIORITIES - ( TickType_t ) uxPriority ); /*lint !e961 MISRA exception as the casts are only redundant for some ports. */
 	listSET_LIST_ITEM_OWNER( &( pxNewTCB->xEventListItem ), pxNewTCB );
+
+	vListInitialiseItem( &( pxNewTCB->xTaskListItem ) );
+	listSET_LIST_ITEM_OWNER( &( pxNewTCB->xTaskListItem ), pxNewTCB );
 
 	#if ( portCRITICAL_NESTING_IN_TCB == 1 )
 	{
@@ -1132,8 +1342,15 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB )
 		traceTASK_CREATE( pxNewTCB );
 
 		prvAddTaskToReadyList( pxNewTCB );
+		prvAddToTaskList( pxNewTCB );
 
 		portSETUP_TCB( pxNewTCB );
+
+		/* This task is choosed as current */
+		if( pxCurrentTCB == pxNewTCB )
+		{
+			prvStackPoolMakeCurrent( pxNewTCB );
+		}
 	}
 	taskEXIT_CRITICAL();
 
@@ -1980,18 +2197,14 @@ BaseType_t xReturn;
 	#if( configSUPPORT_STATIC_ALLOCATION == 1 )
 	{
 		StaticTask_t *pxIdleTaskTCBBuffer = NULL;
-		StackType_t *pxIdleTaskStackBuffer = NULL;
-		uint32_t ulIdleTaskStackSize;
 
 		/* The Idle task is created using user provided RAM - obtain the
 		address of the RAM then create the idle task. */
-		vApplicationGetIdleTaskMemory( &pxIdleTaskTCBBuffer, &pxIdleTaskStackBuffer, &ulIdleTaskStackSize );
+		vApplicationGetIdleTaskMemory( &pxIdleTaskTCBBuffer );
 		xIdleTaskHandle = xTaskCreateStatic(	prvIdleTask,
 												configIDLE_TASK_NAME,
-												ulIdleTaskStackSize,
 												( void * ) NULL, /*lint !e961.  The cast is not redundant for all compilers. */
 												portPRIVILEGE_BIT, /* In effect ( tskIDLE_PRIORITY | portPRIVILEGE_BIT ), but tskIDLE_PRIORITY is zero. */
-												pxIdleTaskStackBuffer,
 												pxIdleTaskTCBBuffer ); /*lint !e961 MISRA exception, justified as it is not a redundant explicit cast to all supported compilers. */
 
 		if( xIdleTaskHandle != NULL )
@@ -2019,7 +2232,7 @@ BaseType_t xReturn;
 	{
 		if( xReturn == pdPASS )
 		{
-			xReturn = xTimerCreateTimerTask();
+			xReturn = xTimerCreateTimerTask(); // TODO: Timer task
 		}
 		else
 		{
@@ -3041,6 +3254,8 @@ void vTaskSwitchContext( void )
 		taskSELECT_HIGHEST_PRIORITY_TASK(); /*lint !e9079 void * is used as this macro is used with timers and co-routines too.  Alignment is known to be fine as the type of the pointer stored and retrieved is the same. */
 		traceTASK_SWITCHED_IN();
 
+		prvStackPoolMakeCurrent( pxCurrentTCB );
+
 		/* After the new task is switched in, update the global errno. */
 		#if( configUSE_POSIX_ERRNO == 1 )
 		{
@@ -3633,6 +3848,8 @@ UBaseType_t uxPriority;
 	using list2. */
 	pxDelayedTaskList = &xDelayedTaskList1;
 	pxOverflowDelayedTaskList = &xDelayedTaskList2;
+
+	vListInitialise( &xTaskList );
 }
 /*-----------------------------------------------------------*/
 
@@ -3677,7 +3894,7 @@ static void prvCheckTasksWaitingTermination( void )
 		pxTaskStatus->xHandle = ( TaskHandle_t ) pxTCB;
 		pxTaskStatus->pcTaskName = ( const char * ) &( pxTCB->pcTaskName [ 0 ] );
 		pxTaskStatus->uxCurrentPriority = pxTCB->uxPriority;
-		pxTaskStatus->pxStackBase = pxTCB->pxStack;
+		pxTaskStatus->pxStackBase = pxTCB->pxStack; // TODO: pxStack now points to bottom of stack
 		pxTaskStatus->xTaskNumber = pxTCB->uxTCBNumber;
 
 		#if ( configUSE_MUTEXES == 1 )
@@ -3748,7 +3965,7 @@ static void prvCheckTasksWaitingTermination( void )
 			}
 			#else
 			{
-				pxTaskStatus->usStackHighWaterMark = prvTaskCheckFreeStackSpace( ( uint8_t * ) pxTCB->pxStack );
+				pxTaskStatus->usStackHighWaterMark = prvTaskCheckFreeStackSpace( ( uint8_t * ) pxTCB->pxStack ); // TODO: pxStack now points to bottom of stack
 			}
 			#endif
 		}
@@ -3838,7 +4055,7 @@ static void prvCheckTasksWaitingTermination( void )
 
 		#if portSTACK_GROWTH < 0
 		{
-			pucEndOfStack = ( uint8_t * ) pxTCB->pxStack;
+			pucEndOfStack = ( uint8_t * ) pxTCB->pxStack; // TODO: pxStack now points to bottom of stack
 		}
 		#else
 		{
@@ -3866,7 +4083,7 @@ static void prvCheckTasksWaitingTermination( void )
 
 		#if portSTACK_GROWTH < 0
 		{
-			pucEndOfStack = ( uint8_t * ) pxTCB->pxStack;
+			pucEndOfStack = ( uint8_t * ) pxTCB->pxStack; // TODO: pxStack now points to bottom of stack
 		}
 		#else
 		{

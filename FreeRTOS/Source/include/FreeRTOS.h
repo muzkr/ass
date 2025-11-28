@@ -55,6 +55,8 @@ extern "C" {
 /* Application specific configuration options. */
 #include "FreeRTOSConfig.h"
 
+#include "ass_config.h"
+
 /* Basic FreeRTOS definitions. */
 #include "projdefs.h"
 
@@ -1115,7 +1117,7 @@ typedef struct xSTATIC_TCB
 	#if ( portUSING_MPU_WRAPPERS == 1 )
 		xMPU_SETTINGS	xDummy2;
 	#endif
-	StaticListItem_t	xDummy3[ 2 ];
+	StaticListItem_t	xDummy3[ 3 ];
 	UBaseType_t			uxDummy5;
 	void				*pxDummy6;
 	uint8_t				ucDummy7[ configMAX_TASK_NAME_LEN ];
