@@ -19,9 +19,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-#define DEFAULT_TASK_STACK_SIZE 256
-
-StackType_t defaultTaskStack[DEFAULT_TASK_STACK_SIZE / sizeof(StackType_t)];
 TaskHandle_t defaultTaskHandle;
 StaticTask_t defaultTask;
 
@@ -62,10 +59,8 @@ int main(void)
     defaultTaskHandle = xTaskCreateStatic(              //
         StartDefaultTask,                               //
         "defaultTask",                                  //
-        sizeof(defaultTaskStack) / sizeof(StackType_t), //
         NULL,                                           //
         1,                                              //
-        defaultTaskStack,                               //
         &defaultTask                                    //
     );
 

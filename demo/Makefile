@@ -32,7 +32,6 @@ Drivers/STM32G0xx_HAL_Driver/Src/stm32g0xx_ll_dma.c \
 ../FreeRTOS/Source/stream_buffer.c \
 ../FreeRTOS/Source/tasks.c \
 ../FreeRTOS/Source/timers.c \
-../FreeRTOS/Source/portable/MemMang/heap_4.c \
 ../FreeRTOS/Source/portable/GCC/ARM_CM0/port.c \
 
 # ASM sources
