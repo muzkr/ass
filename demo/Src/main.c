@@ -18,14 +18,28 @@
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include <string.h>
 
 TaskHandle_t defaultTaskHandle;
 StaticTask_t defaultTask;
+
+TaskHandle_t serialTask1Handle;
+StaticTask_t serialTask1;
+
+TaskHandle_t serialTask2Handle;
+StaticTask_t serialTask2;
 
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 void StartDefaultTask(void *arg);
+void SerialTask(void *arg);
+static void SerialSend(const uint8_t *buf, uint32_t size);
+
+static inline void SerialSendStr(const char *str)
+{
+    SerialSend((const uint8_t *)str, strlen(str));
+}
 
 /**
  * @brief  The application entry point.
@@ -56,12 +70,28 @@ int main(void)
 
     /* Create the thread(s) */
     /* definition and creation of defaultTask */
-    defaultTaskHandle = xTaskCreateStatic(              //
-        StartDefaultTask,                               //
-        "defaultTask",                                  //
-        NULL,                                           //
-        1,                                              //
-        &defaultTask                                    //
+    defaultTaskHandle = xTaskCreateStatic( //
+        StartDefaultTask,                  //
+        "defaultTask",                     //
+        NULL,                              //
+        1,                                 //
+        &defaultTask                       //
+    );
+
+    serialTask1Handle = xTaskCreateStatic( //
+        SerialTask,                        //
+        "serial1",                         //
+        "hello world!\n",                  //
+        1,                                 //
+        &serialTask1                       //
+    );
+
+    serialTask2Handle = xTaskCreateStatic( //
+        SerialTask,                        //
+        "serial2",                         //
+        "2718281828459045\n",              //
+        1,                                 //
+        &serialTask2                       //
     );
 
     /* Start scheduler */
@@ -199,6 +229,29 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
     GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
     LL_GPIO_Init(LED_GREEN_GPIO_Port, &GPIO_InitStruct);
+}
+
+void SerialTask(void *arg)
+{
+    const char *msg = (char *)arg;
+
+    for (;;)
+    {
+        SerialSendStr(msg);
+        // portYIELD();
+        vTaskDelay(pdMS_TO_TICKS(200 * strlen(msg)));
+    }
+}
+
+static void SerialSend(const uint8_t *buf, uint32_t size)
+{
+    for (uint32_t i = 0; i < size; i++)
+    {
+        while (!LL_USART_IsActiveFlag_TXE(USART2))
+        {
+        }
+        LL_USART_TransmitData8(USART2, buf[i]);
+    }
 }
 
 /**
