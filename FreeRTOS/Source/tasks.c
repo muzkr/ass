@@ -640,9 +640,20 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 
 	static void prvStackMoveUp(TCB_t *pxTCB, uint32_t ulDistance)
 	{
-		for (StackType_t *pxIterator = pxTCB->pxStack - 1; pxIterator >= pxTCB->pxTopOfStack; pxIterator--)
+		const uint32_t ulStackSize = prvGetTaskStackSize(pxTCB);
+		if (ulDistance >= ulStackSize)
 		{
-			*(pxIterator + ulDistance) = *pxIterator;
+			memcpy((void *)(pxTCB->pxTopOfStack + ulDistance), //
+				   (void *)(pxTCB->pxTopOfStack),			   //
+				   sizeof(StackType_t) * ulStackSize		   //
+			);
+		}
+		else
+		{
+			for (StackType_t *pxIterator = pxTCB->pxStack - 1; pxIterator >= pxTCB->pxTopOfStack; pxIterator--)
+			{
+				*(pxIterator + ulDistance) = *pxIterator;
+			}
 		}
 		pxTCB->pxStack += ulDistance;
 		pxTCB->pxTopOfStack += ulDistance;
@@ -724,7 +735,7 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 
 	static void prvStackPoolMakeCurrent(TCB_t *pxTCB)
 	{
-		const int32_t lDiff = prvCompareTask( pxTCB , xStackPoolState. pxCurrentTCB);
+		const int32_t lDiff = prvCompareTask(pxTCB, xStackPoolState.pxCurrentTCB);
 
 		if (0 == lDiff)
 		{
@@ -816,7 +827,7 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 			}
 
 			/* pxStack points to the BOTTOM of the stack */
-			pxNewTCB->pxStack = puxStackBuffer - configMINIMAL_STACK_SIZE;
+			pxNewTCB->pxStack = puxStackBuffer + configMINIMAL_STACK_SIZE;
 
 			#if( tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE != 0 ) /*lint !e731 !e9029 Macro has been consolidated for readability reasons. */
 			{
