@@ -348,11 +348,6 @@ PRIVILEGED_DATA static List_t * volatile pxDelayedTaskList;				/*< Points to the
 PRIVILEGED_DATA static List_t * volatile pxOverflowDelayedTaskList;		/*< Points to the delayed task list currently being used to hold tasks that have overflowed the current tick count. */
 PRIVILEGED_DATA static List_t xPendingReadyList;						/*< Tasks that have been readied while the scheduler was suspended.  They will be moved to the ready list when the scheduler is resumed. */
 
-PRIVILEGED_DATA static List_t xTaskList; /* All tasks */
-
-#define prvAddToTaskList( pxTCB )		\
-	vListInsertEnd( &xTaskList, &( ( pxTCB )->xTaskListItem ) )
-
 #if( INCLUDE_vTaskDelete == 1 )
 
 	PRIVILEGED_DATA static List_t xTasksWaitingTermination;				/*< Tasks that have been deleted - but their memory not yet freed. */
@@ -585,6 +580,11 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 
 #define prvGetTaskStackSize(pxTCB) (((pxTCB)->pxStack) - ((pxTCB)->pxTopOfStack))
 
+	PRIVILEGED_DATA static List_t xPooledTaskList; /* Pooled tasks */
+
+#define prvAddPooledTask(pxTCB) \
+		vListInsertEnd(&xPooledTaskList, &((pxTCB)->xTaskListItem))
+
 	static struct
 	{
 		StackType_t *pxStackPool;
@@ -592,17 +592,12 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 		TCB_t *pxCurrentTCB;
 	} xStackPoolState = {0};
 
-	static TCB_t *prvGetPreviousTask(TCB_t *pxTCB)
+	static inline TCB_t *prvGetLastPooledTask()
 	{
-		ListItem_t *pxItem = pxTCB->xTaskListItem.pxPrevious;
-		if (((ListItem_t *)&(pxItem->pxContainer->xListEnd)) == pxItem)
-		{
-			return NULL;
-		}
-		return (TCB_t *)pxItem->pvOwner;
+		return listLIST_IS_EMPTY(&xPooledTaskList) ? NULL : (TCB_t *)xPooledTaskList.xListEnd.pxPrevious->pvOwner;
 	}
 
-	static TCB_t *prvGetNextTask(TCB_t *pxTCB)
+	static TCB_t *prvGetNextPooledTask(TCB_t *pxTCB)
 	{
 		ListItem_t *pxItem = pxTCB->xTaskListItem.pxNext;
 		if (((ListItem_t *)&(pxItem->pxContainer->xListEnd)) == pxItem)
@@ -610,32 +605,6 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 			return NULL;
 		}
 		return (TCB_t *)pxItem->pvOwner;
-	}
-
-	static int32_t prvCompareTask(TCB_t *pxTCB1, TCB_t *pxTCB2)
-	{
-		if (pxTCB1 == pxTCB2)
-		{
-			return 0;
-		}
-
-		for (TCB_t *pxIteratorTCB = prvGetNextTask(pxTCB1);;)
-		{
-			if (NULL == pxIteratorTCB)
-			{
-				/* Reach end */
-				return 1;
-			}
-			if (pxIteratorTCB == pxTCB2)
-			{
-				/* Reach task 2 */
-				return -1;
-			}
-			pxIteratorTCB = prvGetNextTask(pxIteratorTCB);
-		}
-
-		/* Wont reach here */
-		return 0;
 	}
 
 	static void prvStackMoveUp(TCB_t *pxTCB, uint32_t ulDistance)
@@ -669,7 +638,7 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 		pxTCB->pxTopOfStack -= ulDistance;
 	}
 
-	static StackType_t *prvStackPoolAllocate(TCB_t * pxTCB, uint32_t ulStackDepth)
+	static StackType_t *prvStackPoolAllocate(TCB_t *pxTCB, uint32_t ulStackDepth)
 	{
 		/* Initialize stack pool */
 		if (NULL == xStackPoolState.pxStackPool)
@@ -688,6 +657,8 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 
 			xStackPoolState.pxStackPool = pxStack;
 			xStackPoolState.ulStackPoolSize = pxStackEnd - pxStack;
+
+			vListInitialise(&xPooledTaskList);
 		}
 
 		if (NULL == xStackPoolState.pxCurrentTCB)
@@ -699,91 +670,87 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB ) PRIVILEGED_FUNCTION;
 				return NULL;
 			}
 
+			vListInitialiseItem(&(pxTCB->xTaskListItem));
+			listSET_LIST_ITEM_OWNER(&(pxTCB->xTaskListItem), pxTCB);
+
 			/* */
 			xStackPoolState.pxCurrentTCB = pxTCB;
 			return xStackPoolState.pxStackPool + xStackPoolState.ulStackPoolSize - ulStackDepth;
 		}
 		else
 		{
-			TCB_t *pxIteratorTCB = xStackPoolState.pxCurrentTCB;
-			TCB_t *pxPreviousTCB = prvGetPreviousTask(pxIteratorTCB);
+			TCB_t *pxLastTCB = prvGetLastPooledTask();
 
-			uint32_t ulAvailableSize;
-			if (NULL == pxPreviousTCB)
+			StackType_t *pxStack;
+			if (NULL == pxLastTCB)
 			{
-				ulAvailableSize = pxIteratorTCB->pxTopOfStack - xStackPoolState.pxStackPool;
+				uint32_t ulAvailableSize = xStackPoolState.pxCurrentTCB->pxTopOfStack - xStackPoolState.pxStackPool;
+				if (ulAvailableSize < ulStackDepth)
+				{
+					return NULL;
+				}
+				pxStack = xStackPoolState.pxStackPool;
 			}
 			else
 			{
-				ulAvailableSize = pxIteratorTCB->pxTopOfStack - pxPreviousTCB->pxStack;
+				uint32_t ulAvailableSize = xStackPoolState.pxCurrentTCB->pxTopOfStack - pxLastTCB->pxStack;
+				if (ulAvailableSize < ulStackDepth)
+				{
+					return NULL;
+				}
+				pxStack = pxLastTCB->pxStack;
 			}
 
-			if (ulAvailableSize < ulStackDepth)
-			{
-				return NULL;
-			}
+			vListInitialiseItem(&(pxTCB->xTaskListItem));
+			listSET_LIST_ITEM_OWNER(&(pxTCB->xTaskListItem), pxTCB);
+			prvAddPooledTask(pxTCB);
 
-			while (NULL != pxIteratorTCB)
-			{
-				prvStackMoveDown(pxIteratorTCB, ulStackDepth);
-				pxIteratorTCB = prvGetNextTask(pxIteratorTCB);
-			}
-
-			return xStackPoolState.pxStackPool + xStackPoolState.ulStackPoolSize - ulStackDepth;
+			return pxStack;
 		}
 	}
 
 	static void prvStackPoolMakeCurrent(TCB_t *pxTCB)
 	{
-		const int32_t lDiff = prvCompareTask(pxTCB, xStackPoolState.pxCurrentTCB);
-
-		if (0 == lDiff)
+		if (pxTCB == xStackPoolState.pxCurrentTCB)
 		{
 			return;
 		}
 
-		if (lDiff < 0)
+		do
 		{
-			/* The task is lower than the current one */
+			TCB_t *pxCurrentTCB = xStackPoolState.pxCurrentTCB;
+			TCB_t *pxLastTask = prvGetLastPooledTask();
 
-			TCB_t *pxIteratorTCB = prvGetPreviousTask(xStackPoolState.pxCurrentTCB);
-			const uint32_t ulDistance = xStackPoolState.pxCurrentTCB->pxTopOfStack - pxIteratorTCB->pxStack;
+			configASSERT(pxCurrentTCB->pxTopOfStack >= pxLastTask->pxStack);
 
-			for (;;)
-			{
-				prvStackMoveUp(pxIteratorTCB, ulDistance);
-				if (pxTCB == pxIteratorTCB)
-				{
-					break;
-				}
-				pxIteratorTCB = prvGetPreviousTask(pxIteratorTCB);
-			}
-		}
-		else
+			uint32_t ulAvailableSize = pxCurrentTCB->pxTopOfStack - pxLastTask->pxStack;
+
+			configASSERT(ulAvailableSize >= prvGetTaskStackSize(pxTCB));
+
+			prvStackMoveDown(pxCurrentTCB, ulAvailableSize);
+			prvAddPooledTask(pxCurrentTCB);
+
+		} while (0);
+
+		do
 		{
-			/* The task is higher than the current one */
+			uint32_t ulMove = xStackPoolState.pxStackPool + xStackPoolState.ulStackPoolSize - pxTCB->pxStack;
+			prvStackMoveUp(pxTCB, ulMove);
+		} while (0);
 
-			uint32_t ulDistance;
-			do
-			{
-				TCB_t *pxPreviousTCB = prvGetPreviousTask(xStackPoolState.pxCurrentTCB);
-				if (NULL == pxPreviousTCB)
-				{
-					ulDistance = xStackPoolState.pxCurrentTCB->pxTopOfStack - xStackPoolState.pxStackPool;
-				}
-				else
-				{
-					ulDistance = xStackPoolState.pxCurrentTCB->pxTopOfStack - pxPreviousTCB->pxStack;
-				}
-			} while (0);
+		do
+		{
+			const uint32_t ulMove = prvGetTaskStackSize(pxTCB);
 
-			for (TCB_t *pxIterator = xStackPoolState.pxCurrentTCB; pxIterator != pxTCB; pxIterator = prvGetNextTask(pxIterator))
+			for (TCB_t *pxNext = prvGetNextPooledTask(pxTCB); NULL != pxNext; pxNext = prvGetNextPooledTask(pxNext))
 			{
-				prvStackMoveDown(pxIterator, ulDistance);
+				prvStackMoveDown(pxNext, ulMove);
 			}
-		}
+		} while (0);
 
-		xStackPoolState.pxCurrentTCB = pxTCB ;
+		uxListRemove(&pxTCB->xTaskListItem);
+
+		xStackPoolState.pxCurrentTCB = pxTCB;
 	}
 
 /*-----------------------------------------------------------*/
@@ -1167,9 +1134,6 @@ UBaseType_t x;
 	listSET_LIST_ITEM_VALUE( &( pxNewTCB->xEventListItem ), ( TickType_t ) configMAX_PRIORITIES - ( TickType_t ) uxPriority ); /*lint !e961 MISRA exception as the casts are only redundant for some ports. */
 	listSET_LIST_ITEM_OWNER( &( pxNewTCB->xEventListItem ), pxNewTCB );
 
-	vListInitialiseItem( &( pxNewTCB->xTaskListItem ) );
-	listSET_LIST_ITEM_OWNER( &( pxNewTCB->xTaskListItem ), pxNewTCB );
-
 	#if ( portCRITICAL_NESTING_IN_TCB == 1 )
 	{
 		pxNewTCB->uxCriticalNesting = ( UBaseType_t ) 0U;
@@ -1353,7 +1317,6 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB )
 		traceTASK_CREATE( pxNewTCB );
 
 		prvAddTaskToReadyList( pxNewTCB );
-		prvAddToTaskList( pxNewTCB );
 
 		portSETUP_TCB( pxNewTCB );
 
@@ -3859,8 +3822,6 @@ UBaseType_t uxPriority;
 	using list2. */
 	pxDelayedTaskList = &xDelayedTaskList1;
 	pxOverflowDelayedTaskList = &xDelayedTaskList2;
-
-	vListInitialise( &xTaskList );
 }
 /*-----------------------------------------------------------*/
 
