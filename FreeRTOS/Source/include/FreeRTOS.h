@@ -274,10 +274,6 @@ hold explicit before calling the code. */
 		#error If configUSE_TIMERS is set to 1 then configTIMER_QUEUE_LENGTH must also be defined.
 	#endif /* configTIMER_QUEUE_LENGTH */
 
-	#ifndef configTIMER_TASK_STACK_DEPTH
-		#error If configUSE_TIMERS is set to 1 then configTIMER_TASK_STACK_DEPTH must also be defined.
-	#endif /* configTIMER_TASK_STACK_DEPTH */
-
 #endif /* configUSE_TIMERS */
 
 #ifndef portSET_INTERRUPT_MASK_FROM_ISR

@@ -151,7 +151,7 @@ PRIVILEGED_DATA static TaskHandle_t xTimerTaskHandle = NULL;
 	following callback function - which enables the application to optionally
 	provide the memory that will be used by the timer task as the task's stack
 	and TCB. */
-	extern void vApplicationGetTimerTaskMemory( StaticTask_t **ppxTimerTaskTCBBuffer, StackType_t **ppxTimerTaskStackBuffer, uint32_t *pulTimerTaskStackSize );
+	extern void vApplicationGetTimerTaskMemory( StaticTask_t **ppxTimerTaskTCBBuffer );
 
 #endif
 
@@ -239,16 +239,12 @@ BaseType_t xReturn = pdFAIL;
 		#if( configSUPPORT_STATIC_ALLOCATION == 1 )
 		{
 			StaticTask_t *pxTimerTaskTCBBuffer = NULL;
-			StackType_t *pxTimerTaskStackBuffer = NULL;
-			uint32_t ulTimerTaskStackSize;
 
-			vApplicationGetTimerTaskMemory( &pxTimerTaskTCBBuffer, &pxTimerTaskStackBuffer, &ulTimerTaskStackSize );
+			vApplicationGetTimerTaskMemory( &pxTimerTaskTCBBuffer );
 			xTimerTaskHandle = xTaskCreateStatic(	prvTimerTask,
 													configTIMER_SERVICE_TASK_NAME,
-													ulTimerTaskStackSize,
 													NULL,
 													( ( UBaseType_t ) configTIMER_TASK_PRIORITY ) | portPRIVILEGE_BIT,
-													pxTimerTaskStackBuffer,
 													pxTimerTaskTCBBuffer );
 
 			if( xTimerTaskHandle != NULL )

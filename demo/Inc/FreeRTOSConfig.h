@@ -85,6 +85,11 @@ to exclude the API function. */
 #define INCLUDE_vTaskDelay                   1
 #define INCLUDE_xTaskGetSchedulerState       1
 
+#define configUSE_TIMERS                        1
+#define configTIMER_TASK_PRIORITY               1
+#define configTIMER_QUEUE_LENGTH                8
+
+
 /* Normal assert() semantics without relying on the provision of an assert.h
 header file. */
 #define configASSERT( x ) if ((x) == 0) {taskDISABLE_INTERRUPTS(); for( ;; );}

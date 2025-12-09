@@ -30,11 +30,6 @@ static_assert(0 == (configMINIMAL_STACK_SIZE * sizeof(portSTACK_TYPE)) % portBYT
 #endif
 
 // TODO: This may change in the future
-#if configUSE_TIMERS
-#error configUSE_TIMERS cannot be defined as true
-#endif
-
-// TODO: This may change in the future
 #if configUSE_TRACE_FACILITY
 #error configUSE_TRACE_FACILITY cannot be defined as true
 #endif

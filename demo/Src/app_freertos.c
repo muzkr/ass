@@ -21,11 +21,13 @@
 /* GetIdleTaskMemory prototype (linked to static allocation support) */
 void vApplicationGetIdleTaskMemory( StaticTask_t **ppxIdleTaskTCBBuffer );
 void vApplicationGetTaskMemory( StackType_t **ppxTaskStackBuffer, uint32_t *pulTaskStackSize );
+void vApplicationGetTimerTaskMemory( StaticTask_t **ppxTimerTaskTCBBuffer );
 
 #define TASK_STACK_SIZE 1024 // In words (not bytes)
 
-static StaticTask_t xIdleTaskTCBBuffer;
 static StackType_t xTaskStack[TASK_STACK_SIZE];
+static StaticTask_t xIdleTaskTCBBuffer;
+static StaticTask_t xTimerTaskTCBBuffer;
 
 void vApplicationGetIdleTaskMemory( StaticTask_t **ppxIdleTaskTCBBuffer )
 {
@@ -36,4 +38,9 @@ void vApplicationGetTaskMemory( StackType_t **ppxTaskStackBuffer, uint32_t *pulT
 {
   *ppxTaskStackBuffer = xTaskStack;
   *pulTaskStackSize = TASK_STACK_SIZE;
+}
+
+void vApplicationGetTimerTaskMemory( StaticTask_t **ppxTimerTaskTCBBuffer )
+{
+  *ppxTimerTaskTCBBuffer = &xTimerTaskTCBBuffer;
 }
