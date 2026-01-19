@@ -26,13 +26,13 @@ Drivers/STM32G0xx_HAL_Driver/Src/stm32g0xx_ll_rcc.c \
 Drivers/STM32G0xx_HAL_Driver/Src/stm32g0xx_ll_utils.c \
 Drivers/STM32G0xx_HAL_Driver/Src/stm32g0xx_ll_usart.c \
 Drivers/STM32G0xx_HAL_Driver/Src/stm32g0xx_ll_dma.c \
-../FreeRTOS/Source/event_groups.c \
-../FreeRTOS/Source/list.c \
-../FreeRTOS/Source/queue.c \
-../FreeRTOS/Source/stream_buffer.c \
-../FreeRTOS/Source/tasks.c \
-../FreeRTOS/Source/timers.c \
-../FreeRTOS/Source/portable/GCC/ARM_CM0/port.c \
+../FreeRTOS-Kernel-10.6.2/event_groups.c \
+../FreeRTOS-Kernel-10.6.2/list.c \
+../FreeRTOS-Kernel-10.6.2/queue.c \
+../FreeRTOS-Kernel-10.6.2/stream_buffer.c \
+../FreeRTOS-Kernel-10.6.2/tasks.c \
+../FreeRTOS-Kernel-10.6.2/timers.c \
+../FreeRTOS-Kernel-10.6.2/portable/GCC/ARM_CM0/port.c \
 
 # ASM sources
 ASM_SOURCES =  \
@@ -97,8 +97,8 @@ AS_INCLUDES =  \
 -IDrivers/STM32G0xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32G0xx/Include \
 -IDrivers/CMSIS/Include \
--I../FreeRTOS/Source/include \
--I../FreeRTOS/Source/portable/GCC/ARM_CM0 \
+-I../FreeRTOS-Kernel-10.6.2/include \
+-I../FreeRTOS-Kernel-10.6.2/portable/GCC/ARM_CM0 \
 
 # C includes
 C_INCLUDES =  \
@@ -107,8 +107,8 @@ C_INCLUDES =  \
 -IDrivers/STM32G0xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32G0xx/Include \
 -IDrivers/CMSIS/Include \
--I../FreeRTOS/Source/include \
--I../FreeRTOS/Source/portable/GCC/ARM_CM0 \
+-I../FreeRTOS-Kernel-10.6.2/include \
+-I../FreeRTOS-Kernel-10.6.2/portable/GCC/ARM_CM0 \
 
 
 # compile gcc flags
